@@ -60,7 +60,7 @@ const patternsToNotCache = [
 	 */
 	/^\/assets\/php_.*\.wasm$/, // PHP WASM files
 	/^\/assets\/php_.*\.js$/, // PHP JS files
-	/^\/assets\/wp-.*\.zip$/, // Minified WordPress builds and static assets bundles
+	/^\/assets\/wp-.*\.(zip|tar\.zst)$/, // Minified WordPress builds (tar.zst core + zip static bundles)
 	/^\/assets\/sqlite-database-integration-[\w]+\.zip/, // SQLite plugin
 	/^\/assets\/blueprints-.*\.phar$/, // Blueprints v2 runner
 
