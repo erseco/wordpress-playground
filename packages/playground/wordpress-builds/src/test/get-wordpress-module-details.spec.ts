@@ -12,6 +12,13 @@ import { getWordPressModuleDetails } from '../wordpress/get-wordpress-module-det
 describe('getWordPressModuleDetails()', () => {
 	it('should return a data loader module', async () => {
 		const module = getWordPressModuleDetails();
-		expect(module.url).toMatch(/\/wp-\d\.\d\.zip$/);
+		// The core bundle ships as a solid tar.zst (see
+		// docs/streaming-tar-zst-core-bundle.md).
+		expect(module.url).toMatch(/\/wp-\d\.\d\.tar\.zst$/);
+		expect(module.format).toBe('tar.zst');
+		expect(module.container).toBe('tar');
+		expect(module.codec).toBe('zstd');
+		expect(typeof module.sha256).toBe('string');
+		expect(module.fileCount).toBeGreaterThan(0);
 	});
 });
