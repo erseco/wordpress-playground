@@ -345,6 +345,10 @@ export async function createDecodedTarStream(
 		}
 	}
 	if (normalized === 'zstd') {
+		// zstddec exposes the streaming decoder via its './stream' subpath export.
+		// esbuild/vite resolve it for the bundle; some tsc project contexts do not
+		// resolve the subpath's type declarations, so ignore the type-only error.
+		// @ts-ignore -- no bundled type resolution for the zstddec/stream subpath
 		const { ZSTDDecoder } = await import('zstddec/stream');
 		const decoder = new ZSTDDecoder();
 		await decoder.init();

@@ -365,56 +365,74 @@ describe('extractTarStreamToPhp', () => {
 	});
 });
 
-describe('createDecodedTarStream + round-trip (real zstd)', () => {
-	function zstd(bytes: Uint8Array): Uint8Array {
-		// node:zlib zstd (Node >= 22.15) — cast because the installed
-		// @types/node may predate the zstd typings.
-		const z = zlib as any;
-		return new Uint8Array(
-			z.zstdCompressSync(bytes, {
-				params: {
-					[z.constants.ZSTD_c_compressionLevel]: 19,
-					[z.constants.ZSTD_c_windowLog]: 24,
-				},
-			})
-		);
+// node:zlib gained zstd in Node 22.15; the CI unit-test job runs Node 20, where
+// the fixture compression below is unavailable. The zstddec *decode* path is
+// still exercised end-to-end on Node 20 by the boot suites (version-detect etc.).
+const HAS_NODE_ZSTD = typeof (zlib as any).zstdCompressSync === 'function';
+
+describe.skipIf(!HAS_NODE_ZSTD)(
+	'createDecodedTarStream + round-trip (real zstd)',
+	() => {
+		function zstd(bytes: Uint8Array): Uint8Array {
+			// node:zlib zstd (Node >= 22.15) — cast because the installed
+			// @types/node may predate the zstd typings.
+			const z = zlib as any;
+			return new Uint8Array(
+				z.zstdCompressSync(bytes, {
+					params: {
+						[z.constants.ZSTD_c_compressionLevel]: 19,
+						[z.constants.ZSTD_c_windowLog]: 24,
+					},
+				})
+			);
+		}
+
+		it('streams a .tar.zst through zstddec into MEMFS with content + count parity', async () => {
+			const longName =
+				'wp-content/plugins/' + 'z'.repeat(140) + '/main.php';
+			const binary = Buffer.alloc(3000);
+			for (let i = 0; i < binary.length; i += 1)
+				binary[i] = (i * 7) % 256;
+			const tar = buildTar([
+				{ name: 'index.php', data: '<?php // root' },
+				{ name: 'wp-includes/version.php', data: "$wp_version='6.9';" },
+				{ longLink: longName, name: 'trunc', data: 'plugin' },
+				{ name: 'assets/blob.bin', data: binary },
+			]);
+			const compressed = zstd(tar);
+			expect(isZstdBundle(compressed)).toBe(true);
+
+			const stream = await createDecodedTarStream(compressed, 'zstd');
+			const { php, files } = fakePhp();
+			const stats = await extractTarStreamToPhp(
+				stream,
+				php,
+				'/wordpress'
+			);
+
+			expect(stats.fileCount).toBe(4);
+			expect(text(files.get('/wordpress/index.php'))).toBe(
+				'<?php // root'
+			);
+			expect(text(files.get(`/wordpress/${longName}`))).toBe('plugin');
+			expect(
+				Buffer.from(files.get('/wordpress/assets/blob.bin')!).equals(
+					binary
+				)
+			).toBe(true);
+		});
+
+		it('file-count parity: mismatch is detectable via returned stats', async () => {
+			const tar = buildTar([
+				{ name: 'a.txt', data: '1' },
+				{ name: 'b.txt', data: '2' },
+			]);
+			const stream = await createDecodedTarStream(zstd(tar), 'zstd');
+			const { php } = fakePhp();
+			const stats = await extractTarStreamToPhp(stream, php, '/wp');
+			const expectedFileCount = 3; // deliberately wrong
+			expect(stats.fileCount).not.toBe(expectedFileCount);
+			expect(stats.fileCount).toBe(2);
+		});
 	}
-
-	it('streams a .tar.zst through zstddec into MEMFS with content + count parity', async () => {
-		const longName = 'wp-content/plugins/' + 'z'.repeat(140) + '/main.php';
-		const binary = Buffer.alloc(3000);
-		for (let i = 0; i < binary.length; i += 1) binary[i] = (i * 7) % 256;
-		const tar = buildTar([
-			{ name: 'index.php', data: '<?php // root' },
-			{ name: 'wp-includes/version.php', data: "$wp_version='6.9';" },
-			{ longLink: longName, name: 'trunc', data: 'plugin' },
-			{ name: 'assets/blob.bin', data: binary },
-		]);
-		const compressed = zstd(tar);
-		expect(isZstdBundle(compressed)).toBe(true);
-
-		const stream = await createDecodedTarStream(compressed, 'zstd');
-		const { php, files } = fakePhp();
-		const stats = await extractTarStreamToPhp(stream, php, '/wordpress');
-
-		expect(stats.fileCount).toBe(4);
-		expect(text(files.get('/wordpress/index.php'))).toBe('<?php // root');
-		expect(text(files.get(`/wordpress/${longName}`))).toBe('plugin');
-		expect(
-			Buffer.from(files.get('/wordpress/assets/blob.bin')!).equals(binary)
-		).toBe(true);
-	});
-
-	it('file-count parity: mismatch is detectable via returned stats', async () => {
-		const tar = buildTar([
-			{ name: 'a.txt', data: '1' },
-			{ name: 'b.txt', data: '2' },
-		]);
-		const stream = await createDecodedTarStream(zstd(tar), 'zstd');
-		const { php } = fakePhp();
-		const stats = await extractTarStreamToPhp(stream, php, '/wp');
-		const expectedFileCount = 3; // deliberately wrong
-		expect(stats.fileCount).not.toBe(expectedFileCount);
-		expect(stats.fileCount).toBe(2);
-	});
-});
+);

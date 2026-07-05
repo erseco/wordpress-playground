@@ -1,8 +1,11 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import zlib from 'node:zlib';
 // eslint-disable-next-line @nx/enforce-module-boundaries -- in-package build helper
 import { readUstarTar } from '../../build/lib/tar-ustar.mjs';
+// zstddec (WASM) decodes the tar.zst on any Node version; node:zlib zstd would
+// need Node >= 22.15, but the CI unit-test job runs Node 20.
+// @ts-ignore -- zstddec/stream subpath types are not resolved in all tsc contexts
+import { ZSTDDecoder } from 'zstddec/stream';
 
 const wordpressBuildsDirectory = new URL('../wordpress/', import.meta.url);
 
@@ -20,7 +23,7 @@ describe('WordPress core bundle assets', () => {
 			const bundlePath = fileURLToPath(
 				new URL(`../wordpress/${bundle}`, import.meta.url)
 			);
-			const files = listBundleFiles(bundlePath);
+			const files = await listBundleFiles(bundlePath);
 
 			if (!files.has('wp-includes/view-transitions.php')) {
 				continue;
@@ -46,10 +49,12 @@ function getWordPressBundleFiles() {
 	);
 }
 
-function listBundleFiles(bundlePath: string): Set<string> {
-	const compressed = readFileSync(bundlePath);
-	// node:zlib zstd (Node >= 22.15); cast because @types/node may predate it.
-	const tar = (zlib as any).zstdDecompressSync(compressed) as Buffer;
+async function listBundleFiles(bundlePath: string): Promise<Set<string>> {
+	const compressed = new Uint8Array(readFileSync(bundlePath));
+	const decoder = new ZSTDDecoder();
+	await decoder.init();
+	const chunks = [...decoder.decodeStreaming([compressed])] as Uint8Array[];
+	const tar = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
 	const entries = readUstarTar(tar) as Array<{ name: string }>;
 	return new Set(entries.map((entry) => entry.name));
 }
