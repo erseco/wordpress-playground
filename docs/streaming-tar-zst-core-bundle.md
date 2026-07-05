@@ -191,6 +191,45 @@ Reproducible via `packages/playground/wordpress-builds/build/benchmark-tar-zst.m
 Numbers are never fabricated. Anything not measured before the draft PR is labeled
 `pending preview`.
 
+### Measured results (local, this branch)
+
+Environment: Apple Silicon macOS (Darwin 25.4.0), Node v26.4.0, cold in-process runs.
+
+**Bundle size (committed ZIP vs generated `tar.zst`, `windowLog` 25):**
+
+| WordPress |       ZIP |   tar.zst |      Size Δ | Files |
+| --------- | --------: | --------: | ----------: | ----: |
+| 6.3       |  3.43 MiB |  2.07 MiB | **−39.6 %** |  1253 |
+| 6.8       | 23.61 MiB | 19.88 MiB | **−15.8 %** |  1535 |
+| 6.9       | 23.64 MiB | 19.87 MiB | **−15.9 %** |  1595 |
+| 7.0       | 26.61 MiB | 22.58 MiB | **−15.2 %** |  1816 |
+
+(6.4–6.6 ≈ −15.4…−15.6 %; beta ≈ −15.2 %.)
+
+**Extraction into a real PHP-WASM MEMFS (Node `@php-wasm/node`, PHP 8.3, median of 5):**
+
+| WordPress | PHP `ZipArchive` | streaming `tar.zst` |   Speedup |
+| --------- | ---------------: | ------------------: | --------: |
+| 6.3       |            63 ms |               22 ms | **2.82×** |
+| 6.8       |            91 ms |               33 ms | **2.78×** |
+| 6.9       |            98 ms |               39 ms | **2.51×** |
+| 7.0       |           106 ms |               39 ms | **2.72×** |
+
+This matches the PoC's real browser measurements for 6.9 (Chrome 142→60 ms ≈ 2.3×,
+**Firefox 701→262 ms ≈ 2.6×**, Safari/WebKit 142→55 ms ≈ 2.5×).
+
+**JS-side streaming cost (zstddec decode + `StreamingTarParser`, median of 5):** parse
+4.8–6.1 ms; decode+parse 12–20 ms; **peak JS working buffer ≈ 18 MiB for the modern
+bundles**. That peak is dominated by a single ~17.9 MiB `wordpress-static.zip` file
+_embedded inside_ the core bundle (the largest entry); the parser holds only one entry at a
+time, so the peak is bounded by the largest file, not the ~36 MiB uncompressed tree. The
+zstd sliding window (~32 MiB, `windowLog` 25) lives in WASM. A future optimization
+(chunked writes of very large entries directly to MEMFS) would drop the JS peak to the
+decode-chunk size (~128 KiB).
+
+Per-engine browser cold-boot / app-ready deltas: **pending preview** (Cloudflare Pages
+build of this branch).
+
 ## 8. Test plan
 
 New unit suite `streaming-tar-extract.spec.ts` (vitest, in `@wp-playground/wordpress`) covers:
