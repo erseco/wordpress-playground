@@ -90,10 +90,15 @@ node packages/playground/wordpress-builds/build/build-tar-zst.mjs --verify
 ```bash
 # Size + JS streaming-extraction throughput + peak buffer (several versions, median of 5)
 node packages/playground/wordpress-builds/build/benchmark-tar-zst.mjs --runs=5
+
+# Real browsers (Playwright): tar.zst extraction across Chromium/Firefox/WebKit +
+# network-throttled download of zip vs tar.zst (needs `npx playwright install`)
+node packages/playground/wordpress-builds/build/benchmark-tar-zst-browser.mjs --runs=5
 ```
 
-The PHP-WASM `ZipArchive`-vs-`tar.zst` extraction comparison and per-engine cold-boot numbers
-are documented in
+Measured locally: extraction **~2.5–2.8× faster** than PHP `ZipArchive`; on a real 8 Mbps link
+the smaller bundle saves **~4 s of download per cold boot** (WP 6.9). The PHP-WASM extraction
+comparison, per-engine browser numbers, and methodology are in
 [`docs/streaming-tar-zst-core-bundle.md`](https://github.com/WordPress/wordpress-playground/blob/trunk/docs/streaming-tar-zst-core-bundle.md).
 
 ## Note on the PHP-WASM runtime

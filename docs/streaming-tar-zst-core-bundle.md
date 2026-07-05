@@ -227,8 +227,38 @@ zstd sliding window (~32 MiB, `windowLog` 25) lives in WASM. A future optimizati
 (chunked writes of very large entries directly to MEMFS) would drop the JS peak to the
 decode-chunk size (~128 KiB).
 
-Per-engine browser cold-boot / app-ready deltas: **pending preview** (Cloudflare Pages
-build of this branch).
+### Real browser measurements (Playwright, local)
+
+Chromium 140 / Firefox / WebKit 26.5 (Playwright 1.61), same machine, local static server.
+
+**In-browser `tar.zst` extraction** (zstddec streaming decode → `StreamingTarParser` → JS
+writes; the tar.zst side is pure JS, no PHP-WASM), median of 5:
+
+| WordPress | Chromium |    Firefox | WebKit | Peak JS buffer |
+| --------- | -------: | ---------: | -----: | -------------: |
+| 6.9       |    26 ms | **116 ms** |  25 ms |       18.0 MiB |
+| 7.0       |    28 ms | **129 ms** |  25 ms |       20.4 MiB |
+
+Firefox's JS decode is ~4.5× slower than Chromium/WebKit — the same engine gap the PoC saw for
+PHP `ZipArchive`, so Firefox benefits most from the switch.
+
+**Real network-throttled download** (Chromium DevTools `Network.emulateNetworkConditions`),
+`wp-<v>.zip` vs `wp-<v>.tar.zst` — the slow-link benefit:
+
+| Link                | WordPress | ZIP download | tar.zst download |                 Saved |
+| ------------------- | --------- | -----------: | ---------------: | --------------------: |
+| 40 Mbps (broadband) | 6.9       |       4.99 s |           4.20 s | **−0.79 s (−15.8 %)** |
+| 40 Mbps (broadband) | 7.0       |       5.61 s |           4.77 s |     −0.84 s (−14.9 %) |
+| 8 Mbps (DSL / 4G)   | 6.9       |      24.85 s |          20.92 s | **−3.93 s (−15.8 %)** |
+| 8 Mbps (DSL / 4G)   | 7.0       |      27.98 s |          23.76 s |     −4.22 s (−15.1 %) |
+
+On a real 8 Mbps link the smaller bundle alone saves **~4 seconds of download per cold boot**,
+on top of the ~2.5–2.8× faster extraction. The download saving dominates on slow links.
+
+**Still pending preview:** the full end-to-end per-engine _app-ready_ time (booting the whole
+Playground site: download + extract + WASM compile + WP install) — its two variable components
+(download and extraction) are now both measured in real browsers above; the composite awaits the
+Cloudflare Pages build of this branch.
 
 ## 8. Test plan
 
