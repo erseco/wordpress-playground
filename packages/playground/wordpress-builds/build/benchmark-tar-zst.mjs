@@ -11,8 +11,9 @@
 //
 // The PHP-WASM extraction comparison (PHP ZipArchive vs streaming tar.zst into a
 // real MEMFS) and the per-engine cold-boot / app-ready numbers are measured
-// separately in the browser (Playwright) / on the deployed preview — see
-// docs/streaming-tar-zst-core-bundle.md for the methodology.
+// separately in the browser (Playwright, benchmark-tar-zst-browser.mjs) / on the
+// deployed preview — see the tar.zst design notes for the methodology
+// (packages/docs/.../23-architecture/20-wordpress-core-bundle-tar-zst-design.md).
 //
 // Usage:
 //   node build/benchmark-tar-zst.mjs                 # default versions, 5 runs
@@ -144,7 +145,7 @@ async function main() {
 		'\nNote: JS parse = StreamingTarParser only (chunks pre-decoded). ' +
 			'JS decode+parse = zstddec streaming decode + parse (cold). ' +
 			'PHP-WASM ZipArchive vs tar.zst→MEMFS extraction and per-engine app-ready ' +
-			'are measured separately (see docs/streaming-tar-zst-core-bundle.md).'
+			'are measured separately (see benchmark-tar-zst-browser.mjs + the design notes).'
 	);
 }
 

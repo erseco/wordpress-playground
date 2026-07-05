@@ -1,11 +1,17 @@
-# Spec: streaming `tar.zst` WordPress core bundle
+---
+slug: /developers/architecture/wordpress-core-bundle-tar-zst-design
+---
 
-> Status: **implementation spec** for branch `feat/streaming-tar-zst-core-bundle`.
-> Written before any production-code change (Spec-Driven Development). Adapted for
-> `wordpress-playground` from the measured PoC in
-> [`erseco/wordpress-playground#2`](https://github.com/erseco/wordpress-playground/pull/2)
-> and the full implementation in
-> [`ateeducacion/omeka-s-playground#114`](https://github.com/ateeducacion/omeka-s-playground/pull/114).
+# WordPress core bundle `tar.zst`: design notes & benchmarks
+
+Design record and measured data for switching the WordPress **core boot bundle** from a
+per-entry DEFLATE ZIP (extracted with PHP `ZipArchive`) to a single solid **`tar.zst`**
+extracted by streaming. For the user-facing overview see
+[WordPress core bundle](/developers/architecture/wordpress-core-bundle). Adapted for
+`wordpress-playground` from the measured PoC in
+[`erseco/wordpress-playground#2`](https://github.com/erseco/wordpress-playground/pull/2) and
+the full implementation in
+[`ateeducacion/omeka-s-playground#114`](https://github.com/ateeducacion/omeka-s-playground/pull/114).
 
 ## 1. Problem statement
 
@@ -37,7 +43,7 @@ Browser boot (packages/playground/remote):
   playground-worker-endpoint-blueprints-v1.ts
     getWordPressModuleDetails(v).url            → hashed vite ?url asset
     downloadMonitor.monitorFetch(fetch(url))    → Response
-    → new File([arrayBuffer], 'wp.zip')         → BootWordPressOptions.wordPressZip
+    → new File([arrayBuffer], 'wp.bundle')      → BootWordPressOptions.wordPressZip
   bootWordPress()                               (packages/playground/wordpress/src/boot.ts)
     → unzipWordPress(php, wpZip)                (packages/playground/wordpress/src/index.ts)
         → unzipFile(php, wpZip, '/tmp/unzipped-wordpress')   → PHP ZipArchive  (common)
@@ -48,7 +54,7 @@ Browser boot (packages/playground/remote):
 **Important distinctions found during investigation (do not conflate):**
 
 - The **core boot bundle** is `src/wordpress/wp-<v>.zip` (the _full_ WordPress tree, 1818
-  files / ~36 MiB uncompressed for 6.9). This is the artifact this spec replaces.
+  files / ~36 MiB uncompressed for 6.9). This is the artifact this change replaces.
 - `public/wp-<v>/wordpress-static.zip` is a **different** artifact — the static-asset
   _backfill_ bundle for offline/minified builds (CSS/JS/images stripped from the minified
   build), fetched post-boot by `backfillStaticFilesRemovedFromMinifiedBuild()`
@@ -89,10 +95,10 @@ nightly/trunk GitHub `master.zip`) working with no change.
 
 ### Chosen codec parameters
 
-`node:zlib` zstd, level 19 + long-distance matching. **`windowLog` is benchmarked at 24 and
-27** (§7); the smaller decode window is preferred if the size penalty is minor, because the
-client zstd decoder must allocate a buffer of the window size. The chosen value and reason are
-recorded in this doc and the PR body after benchmarking.
+`node:zlib` zstd, level 19 + long-distance matching, **`windowLog` 25 (32 MiB)**. For these
+≤ 40 MiB bundles that yields the same compression as `windowLog 27`, but with a bounded
+multi-segment sliding window instead of the single-segment whole-content buffer that
+`windowLog ≥ 26` forces on the decoder. `windowLog 24` (16 MiB) costs +1.7 MiB (+8 %) for 6.9.
 
 ### Descriptor (manifest) changes
 
@@ -119,8 +125,7 @@ degrade cleanly.
 - **`wordpress-static.zip` static-asset backfill** is not converted. It is a separate,
   post-boot, offline-only optimization with skip-existing (`overwriteFiles=false`) semantics,
   its own service-worker caching, and its own Docker build step. Converting it is a natural
-  follow-up but is out of scope to keep this PR's blast radius bounded. Documented in §Future
-  work.
+  follow-up but is out of scope to keep the blast radius bounded. Documented in §Future work.
 - **PHP runtime packaging** is not changed (see §10 — it is not a `tar.zst` candidate).
 - **Plugin / theme / user-provided ZIP installation** (`installPlugin`, `installTheme`, the
   `unzip` blueprint step, `set-site-language`, the SQLite integration plugin ZIP) is
@@ -141,13 +146,13 @@ degrade cleanly.
   / `.url` keep working; the added descriptor fields are additive. **Breaking change:** the
   core bundle artifact name/format changes (`wp-<v>.zip` → `wp-<v>.tar.zst`) and any consumer
   that hard-codes the `.zip` asset name or assumes PHP-`ZipArchive` extraction of the core
-  bundle must adapt. Surfaced in the PR description.
+  bundle must adapt.
 - **Service worker / offline cache.** The core bundle is a hashed vite `?url` asset cached
   on-demand (cache-first), keyed by `buildVersion` (= git HEAD). Switching the asset extension
   to `.tar.zst` requires `assetsInclude` to accept `*.tar.zst`; cache invalidation happens
-  automatically on the new commit's `buildVersion`. The offline precache manifest already
-  excludes `/assets/wp-*.zip`; the exclusion pattern is widened to also exclude
-  `wp-*.tar.zst`.
+  automatically on the new commit's `buildVersion`. The offline precache manifest excludes the
+  hashed core-bundle `.zst` assets (vite emits `wp-<v>.tar-<hash>.zst`) so they stay cached
+  on-demand, not eagerly precached.
 
 ## 6. Security requirements
 
@@ -169,29 +174,25 @@ The streaming extractor must be safe against archive traversal ("tar-slip") and 
 
 ## 7. Benchmark methodology
 
-Reproducible via `packages/playground/wordpress-builds/build/benchmark-tar-zst.mjs` (committed).
+Reproducible via `packages/playground/wordpress-builds/build/benchmark-tar-zst.mjs` (size +
+JS throughput) and `build/benchmark-tar-zst-browser.mjs` (real browsers).
 
 - **Versions:** the latest bundled (7.0), the previous two minors (6.9, 6.8), and the oldest
   bundled (6.3). `beta` and `nightly`/`trunk` are excluded from size/extraction comparison
   (beta tracks 7.0; nightly is a remote GitHub ZIP with no local bundle).
-- **Bundle size:** committed `wp-<v>.zip` size vs generated `wp-<v>.tar.zst` size, at
-  `windowLog` **24 and 27**; report MiB and %.
+- **Bundle size:** committed `wp-<v>.zip` size vs generated `wp-<v>.tar.zst` size; report MiB
+  and %.
 - **File count:** regular-file count per bundle.
-- **Extraction time (headless, real PHP-WASM MEMFS):** for each version and browser engine,
-  median of **5 runs** (min 3) of (a) PHP `ZipArchive` per-file loop (current path) and (b)
-  streaming `tar.zst`. Peak JS working buffer recorded for the streaming path.
-- **Engines:** Chromium, Firefox, WebKit (Playwright), when the local Playwright browsers are
-  installed. Engines that cannot run locally are marked `pending preview`.
-- **Cold-boot / app-ready:** browser cold-boot delta is `pending preview` unless a Playwright
-  website e2e run is feasible locally; the deployed Cloudflare/Pages preview provides real
-  transfer + app-ready numbers after the draft PR is opened.
-- **Environment recorded in the PR body:** hardware, OS, Node version, browser versions,
-  local-vs-preview, cold-vs-warm cache, run count, and median (p95 where collected).
+- **Extraction time (real PHP-WASM MEMFS):** median of **5 runs** of (a) PHP `ZipArchive`
+  per-file loop (current path) and (b) streaming `tar.zst`.
+- **Browser (Playwright):** in-browser `tar.zst` JS extraction across Chromium/Firefox/WebKit,
+  and Chromium DevTools network-throttled download of ZIP vs `tar.zst`.
+- **Environment recorded below and in the PR body:** hardware, OS, Node version, browser
+  versions, cache state, run count.
 
-Numbers are never fabricated. Anything not measured before the draft PR is labeled
-`pending preview`.
+Numbers are never fabricated; anything not measured is labelled `pending preview`.
 
-### Measured results (local, this branch)
+### Measured results (local)
 
 Environment: Apple Silicon macOS (Darwin 25.4.0), Node v26.4.0, cold in-process runs.
 
@@ -218,21 +219,9 @@ Environment: Apple Silicon macOS (Darwin 25.4.0), Node v26.4.0, cold in-process 
 This matches the PoC's real browser measurements for 6.9 (Chrome 142→60 ms ≈ 2.3×,
 **Firefox 701→262 ms ≈ 2.6×**, Safari/WebKit 142→55 ms ≈ 2.5×).
 
-**JS-side streaming cost (zstddec decode + `StreamingTarParser`, median of 5):** parse
-4.8–6.1 ms; decode+parse 12–20 ms; **peak JS working buffer ≈ 18 MiB for the modern
-bundles**. That peak is dominated by a single ~17.9 MiB `wordpress-static.zip` file
-_embedded inside_ the core bundle (the largest entry); the parser holds only one entry at a
-time, so the peak is bounded by the largest file, not the ~36 MiB uncompressed tree. The
-zstd sliding window (~32 MiB, `windowLog` 25) lives in WASM. A future optimization
-(chunked writes of very large entries directly to MEMFS) would drop the JS peak to the
-decode-chunk size (~128 KiB).
-
-### Real browser measurements (Playwright, local)
-
-Chromium 140 / Firefox / WebKit 26.5 (Playwright 1.61), same machine, local static server.
-
-**In-browser `tar.zst` extraction** (zstddec streaming decode → `StreamingTarParser` → JS
-writes; the tar.zst side is pure JS, no PHP-WASM), median of 5:
+**Real browser measurements (Playwright: Chromium / Firefox / WebKit 26.5).**
+In-browser `tar.zst` extraction (zstddec streaming decode → `StreamingTarParser` → JS writes),
+median of 5:
 
 | WordPress | Chromium |    Firefox | WebKit | Peak JS buffer |
 | --------- | -------: | ---------: | -----: | -------------: |
@@ -240,49 +229,43 @@ writes; the tar.zst side is pure JS, no PHP-WASM), median of 5:
 | 7.0       |    28 ms | **129 ms** |  25 ms |       20.4 MiB |
 
 Firefox's JS decode is ~4.5× slower than Chromium/WebKit — the same engine gap the PoC saw for
-PHP `ZipArchive`, so Firefox benefits most from the switch.
+PHP `ZipArchive`, so Firefox benefits most. The ~18 MiB peak is dominated by a single ~17.9 MiB
+`wordpress-static.zip` file _embedded inside_ the core bundle (the largest entry); the parser
+holds only one entry at a time, so the peak is bounded by the largest file, not the ~36 MiB
+uncompressed tree.
 
 **Real network-throttled download** (Chromium DevTools `Network.emulateNetworkConditions`),
 `wp-<v>.zip` vs `wp-<v>.tar.zst` — the slow-link benefit:
 
-| Link                | WordPress | ZIP download | tar.zst download |                 Saved |
-| ------------------- | --------- | -----------: | ---------------: | --------------------: |
-| 40 Mbps (broadband) | 6.9       |       4.99 s |           4.20 s | **−0.79 s (−15.8 %)** |
-| 40 Mbps (broadband) | 7.0       |       5.61 s |           4.77 s |     −0.84 s (−14.9 %) |
-| 8 Mbps (DSL / 4G)   | 6.9       |      24.85 s |          20.92 s | **−3.93 s (−15.8 %)** |
-| 8 Mbps (DSL / 4G)   | 7.0       |      27.98 s |          23.76 s |     −4.22 s (−15.1 %) |
+| Link                | WordPress |     ZIP | tar.zst |                 Saved |
+| ------------------- | --------- | ------: | ------: | --------------------: |
+| 40 Mbps (broadband) | 6.9       |  4.99 s |  4.20 s | **−0.79 s (−15.8 %)** |
+| 40 Mbps (broadband) | 7.0       |  5.61 s |  4.77 s |     −0.84 s (−14.9 %) |
+| 8 Mbps (DSL / 4G)   | 6.9       | 24.85 s | 20.92 s | **−3.93 s (−15.8 %)** |
+| 8 Mbps (DSL / 4G)   | 7.0       | 27.98 s | 23.76 s |     −4.22 s (−15.1 %) |
 
 On a real 8 Mbps link the smaller bundle alone saves **~4 seconds of download per cold boot**,
 on top of the ~2.5–2.8× faster extraction. The download saving dominates on slow links.
 
 **Still pending preview:** the full end-to-end per-engine _app-ready_ time (booting the whole
 Playground site: download + extract + WASM compile + WP install) — its two variable components
-(download and extraction) are now both measured in real browsers above; the composite awaits the
-Cloudflare Pages build of this branch.
+(download and extraction) are both measured in real browsers above; the composite awaits a
+deployed preview build.
 
 ## 8. Test plan
 
-New unit suite `streaming-tar-extract.spec.ts` (vitest, in `@wp-playground/wordpress`) covers:
+Unit suite `streaming-tar-extract.spec.ts` (vitest, in `@wp-playground/wordpress`) covers:
+normal/nested/empty-dir entries; GNU `././@LongLink` + USTAR `prefix`/`name` long paths;
+headers and file bodies split across chunk boundaries; EOF + padding; truncation detection;
+path-traversal / absolute-path / backslash rejection; symlink / exotic-typeflag rejection;
+file-count parity; bounded `maxBuffered`; and a real `zstddec` round-trip asserting byte-for-byte
+content + file-count parity.
 
-- normal files; nested directories; empty directories
-- long paths via GNU `././@LongLink`; USTAR `prefix`/`name` split
-- headers split across chunk boundaries; file bodies split across chunk boundaries
-- EOF (two zero blocks) and 512-byte padding handling
-- truncated-archive detection (throws)
-- path-traversal rejection (`..`), absolute-path rejection, backslash normalization
-- symlink / exotic-typeflag rejection
-- file-count parity (pass and fail)
-- bounded buffering (`maxBuffered` stays a few MiB, not the whole tar)
-- round-trip: build a `tar.zst` with the build-side writer, stream-decode it, assert
-  byte-for-byte content + exact file-count parity (incl. a long path and a binary blob)
-
-Existing integration/e2e coverage is reused: the blueprints/wordpress/sync spec suites call
+Existing integration coverage is reused: the blueprints/wordpress/sync spec suites call
 `getWordPressModule()` → `bootWordPress({ wordPressZip })`, which — once `getWordPressModule()`
-returns `tar.zst` — boots a real WordPress from streaming `tar.zst` end to end. A focused
-`boot-from-tar-zst` assertion is added.
-
-Validation commands (recorded verbatim in the PR body): `node --check` on every new/edited JS
-file, `sh -n` on shell, package-level `nx test`, `nx lint`, `nx typecheck`.
+returns `tar.zst` — boots a real WordPress from streaming `tar.zst` end to end.
+`wordpress-zip-assets.spec.ts` (the view-transitions CSS regression guard) reads the `tar.zst`
+bundles (zstd decode + USTAR parse).
 
 ## 9. Rollback considerations
 
@@ -318,21 +301,22 @@ Traced end to end. The PHP-WASM runtime is **not** a `tar.zst` candidate:
   package.
 - **No in-repo precompression** (no `.gz`/`.br`/`.zst`, no compression vite plugin). The only
   serving hint, `remote/.htaccess`, just sets `AddType application/wasm .wasm`; transparent
-  HTTP compression is left to the production server. The only tar+gzip in the repo is
-  `nx-extensions`' `package-for-self-hosting` (npm tarballs) — unrelated to runtime loading.
+  HTTP compression is left to the production server.
 
 **Verdict:** wrapping the `.wasm` in `tar.zst` would **break** `WebAssembly.instantiateStreaming`
 (stream-compile during download) and force a full decode-then-compile, and zstd-over-an-already
 -stream-compiled binary yields little. It is **not local** (touches 8 web + 8 node version
-packages and the Emscripten build), **not low-risk**, and **not worth it** for this PR.
-Recorded as **Future work**: rely on server-side Brotli/zstd `Content-Encoding` for the `.wasm`
-instead.
+packages and the Emscripten build), **not low-risk**, and **not worth it**. Recorded as
+**Future work**: rely on server-side Brotli/zstd `Content-Encoding` for the `.wasm` instead.
 
 ## Future work
 
+- Remove the **~18 MiB `wordpress-static.zip` embedded inside the core bundle** (redundant with
+  `public/wp-<v>/wordpress-static.zip`). This is the single largest entry and would roughly
+  **halve** the core download — a bigger win than the `tar.zst` re-container itself, and
+  orthogonal to it.
 - Convert the `wordpress-static.zip` static-asset backfill to streaming `tar.zst` (mirror this
-  work, honor `overwriteFiles=false` as skip-existing in the streaming writer, update SW cache
-  keys/`shouldCacheUrl`).
+  work, honor `overwriteFiles=false` as skip-existing, update SW cache keys/`shouldCacheUrl`).
 - Emit the `tar.zst` natively from the Docker build (`build/Dockerfile`, tar the staged tree)
   so `rebuild:wordpress-builds` produces it without the re-container step.
 - Server-side `Content-Encoding: zstd`/`br` for the `.wasm` runtime.
@@ -340,11 +324,12 @@ instead.
 ## How to rebuild / verify
 
 ```bash
-# Re-container the committed minified ZIPs into deterministic tar.zst + refresh the descriptor
-node packages/playground/wordpress-builds/build/build-tar-zst.mjs --all       # windowLog default (24)
+# Re-container the minified ZIPs into deterministic tar.zst + refresh the descriptor (wlog 25)
+node packages/playground/wordpress-builds/build/build-tar-zst.mjs --all
 # Verify a bundle hash matches the descriptor
 node packages/playground/wordpress-builds/build/build-tar-zst.mjs --verify
 
-# Benchmark ZIP vs tar.zst (size + extraction, several versions, several engines)
-node packages/playground/wordpress-builds/build/benchmark-tar-zst.mjs
+# Benchmarks
+node packages/playground/wordpress-builds/build/benchmark-tar-zst.mjs --runs=5          # size + JS
+node packages/playground/wordpress-builds/build/benchmark-tar-zst-browser.mjs --runs=5  # real browsers
 ```

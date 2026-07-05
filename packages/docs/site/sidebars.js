@@ -217,6 +217,8 @@ const sidebars = {
 						'developers/architecture/wordpress-database',
 						'developers/architecture/browser-wordpress',
 						'developers/architecture/host-your-own-playground',
+						'developers/architecture/wordpress-core-bundle',
+						'developers/architecture/wordpress-core-bundle-tar-zst-design',
 					],
 				},
 				'developers/limitations/index',
