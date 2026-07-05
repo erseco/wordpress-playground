@@ -1,31 +1,32 @@
-import { readdirSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Uint8ArrayReader, ZipReader } from '@zip.js/zip.js';
+import zlib from 'node:zlib';
+// eslint-disable-next-line @nx/enforce-module-boundaries -- in-package build helper
+import { readUstarTar } from '../../build/lib/tar-ustar.mjs';
 
 const wordpressBuildsDirectory = new URL('../wordpress/', import.meta.url);
 
-describe('WordPress zip assets', () => {
+describe('WordPress core bundle assets', () => {
 	it('ships CSS files that WordPress core reads from PHP', async () => {
-		const zipFiles = getWordPressZipFiles();
+		const bundles = getWordPressBundleFiles();
 		expect(
-			zipFiles.length,
-			'Expected at least one wp-*.zip build artifact'
+			bundles.length,
+			'Expected at least one wp-*.tar.zst build artifact'
 		).toBeGreaterThan(0);
 
-		let zipFilesWithViewTransitions = 0;
+		let bundlesWithViewTransitions = 0;
 
-		for (const zipFile of zipFiles) {
-			const zipPath = fileURLToPath(
-				new URL(`../wordpress/${zipFile}`, import.meta.url)
+		for (const bundle of bundles) {
+			const bundlePath = fileURLToPath(
+				new URL(`../wordpress/${bundle}`, import.meta.url)
 			);
-			const files = await listZipFiles(zipPath);
+			const files = listBundleFiles(bundlePath);
 
 			if (!files.has('wp-includes/view-transitions.php')) {
 				continue;
 			}
 
-			zipFilesWithViewTransitions++;
+			bundlesWithViewTransitions++;
 			expect(files.has('wp-admin/css/view-transitions.css')).toBe(true);
 			expect(files.has('wp-admin/css/view-transitions.min.css')).toBe(
 				true
@@ -33,30 +34,22 @@ describe('WordPress zip assets', () => {
 		}
 
 		expect(
-			zipFilesWithViewTransitions,
-			'Expected at least one WordPress zip with wp-includes/view-transitions.php'
+			bundlesWithViewTransitions,
+			'Expected at least one WordPress bundle with wp-includes/view-transitions.php'
 		).toBeGreaterThan(0);
 	});
 });
 
-function getWordPressZipFiles() {
+function getWordPressBundleFiles() {
 	return readdirSync(wordpressBuildsDirectory).filter((fileName) =>
-		/^wp-.*\.zip$/.test(fileName)
+		/^wp-.*\.tar\.zst$/.test(fileName)
 	);
 }
 
-async function listZipFiles(zipPath: string) {
-	const zipBuffer = await readFile(zipPath);
-	const zipData = new Uint8Array(
-		zipBuffer.buffer,
-		zipBuffer.byteOffset,
-		zipBuffer.byteLength
-	);
-	const reader = new ZipReader(new Uint8ArrayReader(zipData));
-	try {
-		const entries = await reader.getEntries();
-		return new Set(entries.map((entry) => entry.filename));
-	} finally {
-		await reader.close();
-	}
+function listBundleFiles(bundlePath: string): Set<string> {
+	const compressed = readFileSync(bundlePath);
+	// node:zlib zstd (Node >= 22.15); cast because @types/node may predate it.
+	const tar = (zlib as any).zstdDecompressSync(compressed) as Buffer;
+	const entries = readUstarTar(tar) as Array<{ name: string }>;
+	return new Set(entries.map((entry) => entry.name));
 }
