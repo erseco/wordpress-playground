@@ -42,7 +42,9 @@ jobs:
                   submodules: true
             - uses: ./.github/actions/prepare-playground
               with:
-                  node-version: 22
+                  # Node 24: the tar.zst core-bundle build helper needs native
+                  # node:zlib zstd support (Node >= 22.15).
+                  node-version: 24
             - name: 'Recompile WordPress'
               shell: bash
               run: npx nx bundle-wordpress:nightly playground-wordpress-builds

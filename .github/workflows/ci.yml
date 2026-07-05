@@ -34,6 +34,13 @@ jobs:
             - run: npx nx affected --target=typecheck
             - run: npx nx check-orphan-pages docs-site
             - run: bash tools/check-node-engine-alignment.sh
+            - name: Syntax-check tar.zst bundle build scripts
+              run: |
+                  node --check packages/playground/wordpress-builds/build/build.js
+                  node --check packages/playground/wordpress-builds/build/build-tar-zst.mjs
+                  node --check packages/playground/wordpress-builds/build/benchmark-tar-zst.mjs
+                  node --check packages/playground/wordpress-builds/build/lib/tar-ustar.mjs
+                  node --check packages/playground/wordpress-builds/build/lib/generate-module-details.mjs
     test-unit-asyncify:
         if: github.repository == 'WordPress/wordpress-playground' || github.event_name == 'pull_request'
         runs-on: ubuntu-latest
