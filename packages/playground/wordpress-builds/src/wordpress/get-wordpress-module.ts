@@ -1,7 +1,8 @@
 import { getWordPressModuleDetails } from './get-wordpress-module-details';
 
 export async function getWordPressModule(wpVersion = '6.8'): Promise<File> {
-	const url = getWordPressModuleDetails(wpVersion).url;
+	const details = getWordPressModuleDetails(wpVersion);
+	const url = details.url;
 	let data = null;
 	if (url.startsWith('/')) {
 		let path = url;
@@ -19,7 +20,13 @@ export async function getWordPressModule(wpVersion = '6.8'): Promise<File> {
 		// @see https://github.com/WordPress/wordpress-playground/issues/2769
 		data = await response.arrayBuffer();
 	}
-	return new File([data as any], `${wpVersion || 'wp'}.zip`, {
-		type: 'application/zip',
-	});
+	// The minified Playground bundle is a solid `tar.zst`; remote versions
+	// (trunk/nightly) are a GitHub `master.zip`. The extractor sniffs the magic
+	// bytes, so the filename/type here are only cosmetic.
+	const isTarZst = details.format === 'tar.zst';
+	return new File(
+		[data as any],
+		`${wpVersion || 'wp'}.${isTarZst ? 'tar.zst' : 'zip'}`,
+		{ type: isTarZst ? 'application/zstd' : 'application/zip' }
+	);
 }
