@@ -25,6 +25,8 @@ describe('WordPress core bundle assets', () => {
 			);
 			const files = await listBundleFiles(bundlePath);
 
+			expect(files.has('wordpress-static.zip')).toBe(false);
+
 			if (!files.has('wp-includes/view-transitions.php')) {
 				continue;
 			}

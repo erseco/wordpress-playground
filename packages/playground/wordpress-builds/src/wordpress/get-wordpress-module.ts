@@ -1,4 +1,7 @@
-import { getWordPressModuleDetails } from './get-wordpress-module-details';
+import {
+	getWordPressModuleDetails,
+	type WordPressModuleDetails,
+} from './get-wordpress-module-details';
 
 export async function getWordPressModule(wpVersion = '6.8'): Promise<File> {
 	const details = getWordPressModuleDetails(wpVersion);
@@ -20,13 +23,30 @@ export async function getWordPressModule(wpVersion = '6.8'): Promise<File> {
 		// @see https://github.com/WordPress/wordpress-playground/issues/2769
 		data = await response.arrayBuffer();
 	}
-	// The minified Playground bundle is a solid `tar.zst`; remote versions
-	// (trunk/nightly) are a GitHub `master.zip`. The extractor sniffs the magic
-	// bytes, so the filename/type here are only cosmetic.
-	const isTarZst = details.format === 'tar.zst';
+	const bundleFileMetadata = getWordPressBundleFileMetadata(details);
 	return new File(
 		[data as any],
-		`${wpVersion || 'wp'}.${isTarZst ? 'tar.zst' : 'zip'}`,
-		{ type: isTarZst ? 'application/zstd' : 'application/zip' }
+		`${wpVersion || 'wp'}.${bundleFileMetadata.extension}`,
+		{
+			type: bundleFileMetadata.mimeType,
+		}
 	);
+}
+
+const WORDPRESS_BUNDLE_FILE_METADATA = {
+	zip: {
+		extension: 'zip',
+		mimeType: 'application/zip',
+	},
+	'tar.zst': {
+		extension: 'tar.zst',
+		mimeType: 'application/zstd',
+	},
+} satisfies Record<
+	WordPressModuleDetails['format'],
+	{ extension: string; mimeType: string }
+>;
+
+function getWordPressBundleFileMetadata(details: WordPressModuleDetails) {
+	return WORDPRESS_BUNDLE_FILE_METADATA[details.format];
 }

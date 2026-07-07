@@ -7,6 +7,16 @@
  * and should still be linted and picked up by the test runner.
  */
 
+import { createHash } from 'node:crypto';
+import { statSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+// eslint-disable-next-line @nx/enforce-module-boundaries -- in-package build helper
+import { readUstarTar } from '../../build/lib/tar-ustar.mjs';
+// zstddec (WASM) decodes the tar.zst on any Node version; node:zlib zstd would
+// need Node >= 22.15, but the CI unit-test job runs Node 20.
+// @ts-ignore -- zstddec/stream subpath types are not resolved in all tsc contexts
+import { ZSTDDecoder } from 'zstddec/stream';
+import { getWordPressModule } from '../wordpress/get-wordpress-module';
 import { getWordPressModuleDetails } from '../wordpress/get-wordpress-module-details';
 
 describe('getWordPressModuleDetails()', () => {
@@ -18,7 +28,53 @@ describe('getWordPressModuleDetails()', () => {
 		expect(module.format).toBe('tar.zst');
 		expect(module.container).toBe('tar');
 		expect(module.codec).toBe('zstd');
-		expect(typeof module.sha256).toBe('string');
+		expect(module.sha256).toMatch(/^[0-9a-f]{64}$/);
 		expect(module.fileCount).toBeGreaterThan(0);
+	});
+
+	it('reports committed tar.zst artifact metadata', async () => {
+		const module = getWordPressModuleDetails('6.8');
+		const bundlePath = fileURLToPath(
+			new URL('../wordpress/wp-6.8.tar.zst', import.meta.url)
+		);
+		const bundleBytes = readFileSync(bundlePath);
+
+		const decoder = new ZSTDDecoder();
+		await decoder.init();
+		const chunks = [
+			...decoder.decodeStreaming([new Uint8Array(bundleBytes)]),
+		] as Uint8Array[];
+		const tar = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+		const entries = readUstarTar(tar) as Array<{ name: string }>;
+
+		expect(module.size).toBe(statSync(bundlePath).size);
+		expect(module.sha256).toBe(
+			createHash('sha256').update(bundleBytes).digest('hex')
+		);
+		expect(module.fileCount).toBe(entries.length);
+	});
+
+	it('keeps remote trunk modules classified as ZIPs without local metadata', () => {
+		const module = getWordPressModuleDetails('trunk');
+		expect(module.format).toBe('zip');
+		expect(module.container).toBe('zip');
+		expect(module.codec).toBe('deflate');
+		expect(module.sha256).toBeUndefined();
+		expect(module.fileCount).toBeUndefined();
+	});
+
+	it('uses descriptor metadata when creating the module File', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3])))
+		);
+
+		try {
+			const module = await getWordPressModule('trunk');
+			expect(module.name).toBe('trunk.zip');
+			expect(module.type).toBe('application/zip');
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });

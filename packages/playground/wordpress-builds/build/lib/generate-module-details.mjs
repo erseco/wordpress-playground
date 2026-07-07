@@ -56,6 +56,8 @@ import url_${slugify(version)} from './wp-${version}.tar.zst?url';`
 		case '${version}':
 			return {
 				format: 'zip',
+				container: 'zip',
+				codec: 'deflate',
 				size: ${JSON.stringify(remoteWordPressModules[version].size ?? 0)},
 				url: ${JSON.stringify(remoteWordPressModules[version].url)},
 			};
@@ -74,6 +76,8 @@ import url_${slugify(version)} from './wp-${version}.tar.zst?url';`
 		case 'nightly':
 			return {
 				format: 'zip',
+				container: 'zip',
+				codec: 'deflate',
 				size: ${JSON.stringify(remoteWordPressModules.trunk.size ?? 0)},
 				url: ${JSON.stringify(remoteWordPressModules.trunk.url)},
 			};
@@ -92,10 +96,10 @@ import url_${slugify(version)} from './wp-${version}.tar.zst?url';`
 export interface WordPressModuleDetails {
 	/** Bundle container/codec. 'tar.zst' = solid zstd tar (streaming extract); 'zip' = per-entry DEFLATE. */
 	format: 'tar.zst' | 'zip';
-	/** Archive container, present for tar.zst bundles. */
-	container?: 'tar';
-	/** Compression codec, present for tar.zst bundles. */
-	codec?: 'zstd';
+	/** Archive container. */
+	container: 'tar' | 'zip';
+	/** Compression codec used by the archive payload. */
+	codec: 'zstd' | 'deflate';
 	/** Compressed byte length of the bundle. */
 	size: number;
 	/** URL (or dev filesystem path) of the bundle. */
